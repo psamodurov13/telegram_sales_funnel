@@ -96,6 +96,7 @@ def get_query_for_posts():
         posts_values = {k: v for k, v in post.items() if v and k not in ['add_tags', 'buttons', 'post_type']}
         logger.info(f'POST VALUES - {posts_values}')
         insert('posts', posts_values)
+        # Пост добавлен
         fetched_post_types = fetchall('post_types', ['id'], f'name = "{post["post_type"]}"')
         post_type_id = fetched_post_types[0]['id']
         fetched_post = fetchall('posts', ['id'], f'count = {post["count"]}')
@@ -108,3 +109,37 @@ def get_query_for_posts():
         }
         logger.info(f'POST/POST_TYPE VALUES - {posts_values}')
         insert('posts_post_types', posts_post_types_values)
+        # Связь поста с типом поста добавлена
+        if post['buttons']:
+            for button in post['buttons']:
+                button_values = {
+                    'button_text': button.get('button_text', None),
+                    'button_url': button.get('button_url', None),
+                    'next_post': button.get('next_post', None)
+                }
+                logger.info(f'BUTTON VALUES - {button_values}')
+                insert('buttons', button_values)
+                fetched_actions = fetchall('actions', ['id'], f'name = "{button["action"]}"')
+                action_id = fetched_actions[0]['id']
+                button_id = fetchall('buttons', ['id'])[-1]['id']
+                buttons_actions_values = {
+                    'button_id': button_id,
+                    'action_id': action_id
+                }
+                logger.info(f'BUTTONS ACTIONS VALUES - {buttons_actions_values}')
+                insert('buttons_actions', buttons_actions_values)
+                posts_buttons_values = {
+                    'post_id': post_id,
+                    'button_id': button_id
+                }
+                logger.info(f'POST BUTTONS VALUES - {posts_buttons_values}')
+                insert('posts_buttons', posts_buttons_values)
+        if post['add_tags']:
+            for tag in post['add_tags']:
+                tag_id = fetchall('tags', ['id'], f'name = "{tag}"')[0]['id']
+                posts_add_tags = {
+                    'post_id': post_id,
+                    'tag_id': tag_id
+                }
+                insert('posts_add_tags', posts_add_tags)
+
