@@ -10,9 +10,10 @@ create table if not exists tags(
 create table if not exists users(
     id integer primary key AUTOINCREMENT,
     telegram_id integer UNIQUE,
+    username text,
     first_name text,
     last_name text,
-    username text,
+    full_name text,
     created_at datetime,
     current_step integer
 );
@@ -48,6 +49,7 @@ create table if not exists buttons_actions(
 create table if not exists posts(
     id integer primary key AUTOINCREMENT,
     text text,
+    emoji text,
     photo text,
     audio text,
     video text,

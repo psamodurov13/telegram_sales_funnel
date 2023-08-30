@@ -1,13 +1,14 @@
 import time
-from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 from loguru import logger
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher import filters
 from config import *
 from markups import *
-from db import *
 from aiogram.dispatcher import FSMContext
+from utils import *
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from datetime import datetime, timedelta
+import asyncio
 
 logger.add('debug.log', format='{time} {level} {message}', level='INFO', rotation='15MB', compression='zip')
 bot = Bot(token=TOKEN)
@@ -15,17 +16,138 @@ storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 
+async def interval_schedule(message, post_info, interval):
+    '''Функция отправки поста с определенным интервалом'''
+    logger.info(f'INTERVAL SCHEDULE STARTED')
+    await asyncio.sleep(interval)
+    await send_post(message, post_info)
+
+
+async def get_next_post(message, user_info, next_post_count):
+    '''Функция для получения следующего поста'''
+    logger.info(f'GET NEXT POST STARTED')
+    post_info = get_post(user_info['telegram_id'], next_post_count)
+    logger.info(f'POST INFO - {post_info}')
+    return post_info
+
+
+async def increase_count(message, count):
+    '''Функция изменяющая текущий шаг у пользователя'''
+    user_info = edit('users', 'telegram_id', message.chat.id, 'current_step', count)
+    logger.info(f'COUNT WAS INCREASED')
+    return user_info
+
+
+async def to_next_post(message, count):
+    '''Функция перехода к следующему посту'''
+    user_info = await increase_count(message, count)
+    post_info = await get_next_post(message, user_info, user_info['current_step'])
+    if post_info['timer']:
+        interval = post_info['timer']
+    elif post_info['time']:
+        post_time = datetime.strptime(post_info['time'], '%H:%M').time()
+        now_time = datetime.now().time()
+        if post_time > now_time:
+            today = datetime.today()
+            post_date_time = datetime(today.year, today.month, today.day, post_time.hour, post_time.minute)
+        else:
+            tomorrow = datetime.today() + timedelta(days=1)
+            post_date_time = datetime(tomorrow.year, tomorrow.month, tomorrow.day, post_time.hour, post_time.minute)
+        interval = post_date_time.timestamp() - time.time()
+    else:
+        interval = 60
+        logger.debug(f'DEFAULT INTERVAL FOR {post_info}')
+    logger.info(f'INTERVAL - {interval}')
+    asyncio.create_task(interval_schedule(message, post_info, interval))
+
+
+async def fill_name(text, name, for_change='{first_name}'):
+    '''Функция заполнения имени в посте'''
+    if for_change in text:
+        text = text.replace(for_change, name)
+    return text
+
+
+async def add_tags(telegram_id, tag_list):
+    user_info = get_user(telegram_id)
+    logger.info(f'USER INFO {user_info}')
+    for i in tag_list:
+        columns_values = {
+            'user_id': user_info['id'],
+            'tag_id': i['tag_id']
+        }
+        logger.info(f'COLUMNS VALUES {columns_values}')
+        insert('users_tags', columns_values)
+        logger.info(f'TAG {i} WAS ADDED FOR USER {telegram_id}')
+
+
+async def send_post(message, post_info):
+    '''Функция отправки поста'''
+    if post_info['buttons']:
+        keyboard = get_keyboard(post_info['buttons'])
+    else:
+        keyboard = None
+    if post_info['emoji']:
+        await message.answer(post_info['emoji'])
+    if post_info['photo'] or post_info['video']:
+        if post_info['photo']:
+            path_to_media = f'media/photo/{post_info["photo"]}'
+            message_function = bot.send_photo
+        elif post_info['video']:
+            path_to_media = f'media/video/{post_info["video"]}'
+            message_function = bot.send_video
+        else:
+            path_to_media = None
+            message_function = None
+        if path_to_media:
+            with open(path_to_media, 'rb') as file:
+                media_file = file.read()
+        else:
+            media_file = None
+        if post_info['text']:
+            caption = await fill_name(post_info['text'], message.chat.first_name)
+        else:
+            caption = None
+        logger.info(f'POST DATA - {path_to_media} / {message_function} / {caption}')
+        if message_function:
+            await message_function(message.chat.id, media_file, caption=caption, parse_mode='HTML', reply_markup=keyboard)
+    elif post_info['text']:
+        text = await fill_name(post_info['text'], message.chat.first_name)
+        await message.answer(text, parse_mode='HTML', reply_markup=keyboard)
+    elif post_info['audio']:
+        with open(f'media/audio/{post_info["audio"]}', 'rb') as file:
+            await message.answer_audio(file)
+    if post_info['add_tags_id']:
+        await add_tags(message.chat.id, post_info['add_tags_id'])
+    if post_info['default_next']:
+        await to_next_post(message, post_info['default_next'])
+        return
+
+
 @dp.message_handler(commands='start')
 async def start(message: types.Message, state: FSMContext):
     '''Функция выдающая ответ на команду start'''
-    if message.from_user['username']:
-        username = message.from_user['username']
-    elif message.from_user['first_name']:
-        username = message.from_user['first_name']
-    else:
-        username = message.from_user['id']
-    add_user(message.from_user['id'], username)
-    await message.answer('привет. Как дела')
+    username = message.from_user['username']
+    first_name = message.from_user['first_name']
+    last_name = message.from_user['last_name']
+    full_name = message.from_user.full_name
+    logger.info(f'USERNAME - {username}, FIRST NAME - {first_name}, LAST NAME - {last_name}, FULL NAME - {full_name}')
+    user_info = add_user(
+        message.from_user['id'],
+        message.from_user['username'],
+        message.from_user['first_name'],
+        message.from_user['last_name'],
+        message.from_user.full_name,
+    )
+    post_info = get_post(user_info['telegram_id'])
+    await send_post(message, post_info)
+
+
+@dp.message_handler(content_types=['text'])
+async def process_text_message(message: types.Message):
+    '''Функция обработки текстовых сообщений'''
+    post_info = get_post(message.from_user.id, 1000)
+    await send_post(message, post_info)
 
 
 @dp.message_handler(filters.IDFilter(user_id=ADMIN_TELEGRAM_ID), commands=['admin'])
@@ -33,187 +155,21 @@ async def get_users_count(message: types.Message):
     await message.answer('Меню администратора', reply_markup=get_admin_menu())
 
 
-# @dp.message_handler(lambda message: message.text.startswith('/del'))
-# async def del_expense(message: types.Message):
-#     """Удаляет сотрудника по идентификатору"""
-#     row_id = int(message.text[4:])
-#     answer_message = delete_employee(row_id)
-#     await message.answer(answer_message)
-#
-#
-# @dp.message_handler(content_types=['text'])
-# @auth
-# async def process_text_message(message: types.Message, state: FSMContext):
-#     logger.info(f'MESSAGE - {message}')
-#     '''Функция обработки текстовых сообщений'''
-#     amount = check_amount_message(message.text)
-#     if amount:
-#         async with state.proxy() as data:
-#             data['amount'] = amount
-#             input_currency = data['input_currency']
-#             output_currency = data['output_currency']
-#             pay_type = data.get('pay_type', list(currencies[input_currency]["pay_type"].keys())[0] if input_currency in currencies else None)
-#             currency_for_amount = data['currency_for_amount']
-#         currency_code = get_currency_code(currency_for_amount)
-#         logger.info(f'PAY TYPE {pay_type}')
-#         input_pay_type_name = get_pay_type_name(input_currency, pay_type)
-#         logger.info(f'INPUT PAY TYPE {input_pay_type_name}')
-#         output_pay_type_name = get_pay_type_name(output_currency, pay_type)
-#         logger.info(f'OUTPUT PAY TYPE {output_pay_type_name}')
-#         if currency_code:
-#             input_currency_quantity, output_currency_quantity = get_exchange_rate(
-#                 input_currency, input_pay_type_name,
-#                 output_currency, output_pay_type_name,
-#                 currency_for_amount, amount, pay_type
-#             )
-#             if input_currency_quantity is not None and output_currency_quantity is not None:
-#                 real_exchange_rate = input_currency_quantity / output_currency_quantity
-#                 async with state.proxy() as data:
-#                     data['real_exchange_rate'] = real_exchange_rate
-#                     data['current_percent'] = default_percent
-#                     data['input_pay_type_name'] = input_pay_type_name
-#                     data['output_pay_type_name'] = output_pay_type_name
-#                     if currency_for_amount == input_currency:
-#                         data['input_currency_quantity'] = input_currency_quantity
-#                         data['output_currency_quantity'] = None
-#                     else:
-#                         data['input_currency_quantity'] = None
-#                         data['output_currency_quantity'] = output_currency_quantity
-#                 input_currency_quantity, output_currency_quantity, exchange_rate_for_message = get_change_offer(
-#                     input_currency, input_currency_quantity, output_currency, output_currency_quantity,
-#                     real_exchange_rate, default_percent, currency_for_amount
-#                 )
-#                 await message.answer(f'Обмен {input_currency}' + (f' ({input_pay_type_name})' if input_pay_type_name else '') +
-#                                      f' - {output_currency}' + (f' ({output_pay_type_name})' if output_pay_type_name else '') + '\n' +
-#                                      f'Курс: {exchange_rate_for_message}\n\n'
-#                                      f'Отдаете: {input_currency_quantity} {get_currency_code(input_currency)}' +
-#                                      (f' ({input_pay_type_name})' if input_pay_type_name else '') + '\n' +
-#                                      f'Получаете: {output_currency_quantity} {get_currency_code(output_currency)}' +
-#                                      (f' ({output_pay_type_name})' if output_pay_type_name else ''),
-#                                      reply_markup=transfer_types_keyboard())
-#                 await message.answer('------', reply_markup=percents_buttons())
-#             else:
-#                 await message.answer(f'Ошибка. Нет подходящих предложений для этой суммы /start', reply_markup=transfer_types_keyboard())
-#
-#         else:
-#             await message.answer('Ошибка', reply_markup=transfer_types_keyboard())
-#         # await state.finish()
-#     else:
-#         # change_pair = get_currencies_from_message(message.text)
-#         change_pair, pay_type, currency_for_amount = parse_currencies_from_message(message.text)
-#         if change_pair:
-#             # записываем данные в хранилище
-#             async with state.proxy() as data:
-#                 data['input_currency'] = change_pair[0]
-#                 data['output_currency'] = change_pair[1]
-#                 data['pay_type'] = pay_type
-#                 data['currency_for_amount'] = currency_for_amount
-#             if change_pair[0] in currencies and len(currencies[change_pair[0]]['pay_type']) > 1 and pay_type is None:
-#                 await message.answer(f"Выберите способ ввода",
-#                                      reply_markup=choice_pay_type_keyboard(currencies[change_pair[0]]['pay_type']))
-#             elif change_pair[1] in currencies and len(currencies[change_pair[1]]['pay_type']) > 1 and pay_type is None:
-#                 await message.answer(f"Выберите способ вывода",
-#                                      reply_markup=choice_pay_type_keyboard(currencies[change_pair[1]]['pay_type']))
-#             # else:
-#             #     await message.answer(f"Выберите валюту для ввода суммы",
-#             #                          reply_markup=choice_currency_for_amount(change_pair))
-#             elif currency_for_amount:
-#                 await message.answer(f'Введите сумму в {currency_for_amount}', reply_markup=amount_keyboard())
-#             else:
-#                 await message.answer(f'Ошибка', reply_markup=transfer_types_keyboard())
-#         else:
-#             await message.answer(f"Ошибка, либо недостаточно прав", reply_markup=transfer_types_keyboard())
-#
-#
-# @dp.callback_query_handler(markups.cd_confirm_user.filter())
-# async def bot_callback_confirm_user(callback: types.CallbackQuery, callback_data: dict):
-#     logger.info(f'CALLBACK DATA IN HANDLER - {callback}')
-#     action = callback_data.get('action')
-#     telegram_id = callback_data.get('telegram_id')
-#     username = callback_data.get('username')
-#     logger.info(f'RESPONSE - {action}, {telegram_id}')
-#     if action == 'Accept':
-#         db.add_user(telegram_id, username, True)
-#         await callback.message.answer('Доступ разрешен')
-#         await bot.send_message(telegram_id, 'Доступ разрешен')
-#     elif action == 'Decline':
-#         db.add_user(telegram_id, username, False)
-#         await callback.message.answer('Доступ заблокирован')
-#         await bot.send_message(telegram_id, 'Доступ заблокирован')
-#     else:
-#         await callback.message.answer('Ошибка')
-#
-#
-# @dp.callback_query_handler(markups.cd_choice_pay_type.filter())
-# async def bot_callback_choice_pay_type(callback: types.CallbackQuery, callback_data: dict, state: FSMContext):
-#     logger.info(f'CALLBACK DATA IN HANDLER - {callback}')
-#     pay_type = callback_data.get('pay_type')
-#     logger.info(f'RESPONSE - {pay_type}')
-#     async with state.proxy() as data:
-#         logger.info(f'CURRENT STORAGE DATA {data}')
-#         data['pay_type'] = pay_type
-#         input_currency = data['input_currency']
-#         output_currency = data['output_currency']
-#     await callback.message.answer('Выберите валюту для ввода суммы',
-#                                   reply_markup=choice_currency_for_amount([input_currency, output_currency]))
-#
-#
-# @dp.callback_query_handler(markups.cd_choice_currency_for_amount.filter())
-# async def bot_callback_choice_currency_for_amount(callback: types.CallbackQuery, callback_data: dict, state: FSMContext):
-#     logger.info(f'CALLBACK DATA IN HANDLER - {callback}')
-#     currency = callback_data.get('currency')
-#     logger.info(f'RESPONSE - {currency}')
-#     async with state.proxy() as data:
-#         data['currency_for_amount'] = currency
-#     currency_code = get_currency_code(currency)
-#     if currency_code:
-#         await callback.message.answer(f'Валюта для суммы получена. Введите сумму в {currency_code}',
-#                                       reply_markup=amount_keyboard())
-#     else:
-#         await callback.message.answer(f'Ошибка', reply_markup=transfer_types_keyboard())
-#
-#
-# @dp.callback_query_handler(markups.cd_percents.filter())
-# async def bot_callback_percents(callback: types.CallbackQuery, callback_data: dict, state: FSMContext):
-#     logger.info(f'CALLBACK DATA IN HANDLER - {callback}')
-#     percent = float(callback_data.get('percent'))
-#     logger.info(f'RESPONSE - {percent}')
-#     async with state.proxy() as data:
-#         real_exchange_rate = data['real_exchange_rate']
-#         data['current_percent'] = default_percent
-#         input_currency = data['input_currency']
-#         output_currency = data['output_currency']
-#         currency_for_amount = data['currency_for_amount']
-#         input_pay_type_name = data['input_pay_type_name']
-#         output_pay_type_name = data['output_pay_type_name']
-#         if currency_for_amount == input_currency:
-#             input_currency_quantity = data['input_currency_quantity']
-#             output_currency_quantity = None
-#         else:
-#             input_currency_quantity = None
-#             output_currency_quantity = data['output_currency_quantity']
-#     input_currency_quantity, output_currency_quantity, exchange_rate_for_message = get_change_offer(
-#         input_currency, input_currency_quantity, output_currency, output_currency_quantity,
-#         real_exchange_rate, percent, currency_for_amount
-#     )
-#     await callback.message.answer(f'Обмен {input_currency}' + (f' ({input_pay_type_name})' if input_pay_type_name else '') +
-#                          f' - {output_currency}' + (f' ({output_pay_type_name})' if output_pay_type_name else '')
-#                          + '\n'
-#                            f'Курс: {exchange_rate_for_message}\n\n'
-#                            f'Отдаете: {input_currency_quantity} {get_currency_code(input_currency)}' + (
-#                              f' ({input_pay_type_name})' if input_pay_type_name else '') + '\n' +
-#                          f'Получаете: {output_currency_quantity} {get_currency_code(output_currency)}' + (
-#                              f' ({output_pay_type_name})' if output_pay_type_name else ''),
-#                          reply_markup=transfer_types_keyboard())
-#     await callback.message.answer(f'------', reply_markup=percents_buttons())
+@dp.callback_query_handler(cd_next_post.filter())
+async def bot_callback_next_post(callback: types.CallbackQuery, callback_data: dict):
+    logger.info(f'CALLBACK DATA IN HANDLER - {callback}')
+    post_info = get_post(callback['from']['id'], callback_data.get('next_post'))
+    logger.info(f'POST INFO - {post_info}')
+    await send_post(callback.message, post_info)
 
 @logger.catch()
 def main():
-    executor.start_polling(dp)
+    executor.start_polling(dp, skip_updates=True)
 
 
 if __name__ == '__main__':
     main()
+
 
 
 
