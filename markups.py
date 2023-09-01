@@ -5,17 +5,62 @@ from db import *
 from aiogram import types
 
 cd_next_post = CallbackData('cd_next_post', 'next_post')
-
 cd_admin = CallbackData('admin', 'action')
+cd_create_mailing = CallbackData('cd_create_mailing', 'field')
+cd_create_mailing_tags = CallbackData('cd_create_mailing_tags', 'tag_id')
+cd_confirm = CallbackData('cd_confirm', 'result')
 
 
-def get_admin_menu():
+def get_admin_menu_keyboard():
+    types.ReplyKeyboardRemove()
     admin_menu = types.InlineKeyboardMarkup()
     users_count = types.InlineKeyboardButton(text='Количество пользователей', callback_data=cd_admin.new(
         action='UsersCount',
     ))
+    mailings = types.InlineKeyboardButton(text='Запустить рассылку', callback_data=cd_admin.new(
+        action='Mailing'
+    ))
     admin_menu.add(users_count)
+    admin_menu.add(mailings)
     return admin_menu
+
+
+def get_create_mailing_keyboard():
+    name_field = types.InlineKeyboardButton(text='Имя рассылки', callback_data=cd_create_mailing.new(field='name'))
+    text_field = types.InlineKeyboardButton(text='Текст рассылки', callback_data=cd_create_mailing.new(field='text'))
+    datetime_field = types.InlineKeyboardButton(text='Дата и время рассылки', callback_data=cd_create_mailing.new(field='datetime'))
+    photo_field = types.InlineKeyboardButton(text='Фото', callback_data=cd_create_mailing.new(field='photo'))
+    audio_field = types.InlineKeyboardButton(text='Аудио', callback_data=cd_create_mailing.new(field='audio'))
+    video_field = types.InlineKeyboardButton(text='Видео', callback_data=cd_create_mailing.new(field='video'))
+    tag_field = types.InlineKeyboardButton(text='Тег', callback_data=cd_create_mailing.new(field='tag_id'))
+    keyboard = types.InlineKeyboardMarkup()
+    for i in [name_field, text_field, datetime_field, photo_field, audio_field, video_field, tag_field]:
+        keyboard.add(i)
+    return keyboard
+
+
+def get_tags_keyboard():
+    tags = fetchall('tags', ['id', 'name'])
+    keyboard = types.InlineKeyboardMarkup()
+    for tag in tags:
+        keyboard.add(types.InlineKeyboardButton(text=tag['name'], callback_data=cd_create_mailing_tags.new(
+            tag_id=tag['id']
+        )))
+    keyboard.add(types.InlineKeyboardButton(text='Все пользователи', callback_data=cd_create_mailing_tags.new(
+            tag_id=0
+        )))
+    return keyboard
+
+
+def get_confirm_keyboard():
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton(text='Да', callback_data=cd_confirm.new(
+        result='accept'
+    )))
+    keyboard.add(types.InlineKeyboardButton(text='Heт', callback_data=cd_confirm.new(
+        result='decline'
+    )))
+    return keyboard
 
 
 def get_keyboard(buttons):
@@ -42,3 +87,8 @@ def get_keyboard(buttons):
         for item in keys:
             keyboard.add(item)
     return keyboard
+
+
+skip_keyboard = types.ReplyKeyboardMarkup(keyboard=[
+    [types.KeyboardButton(text='Пропустить')]
+])

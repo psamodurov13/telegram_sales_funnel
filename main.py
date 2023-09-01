@@ -1,4 +1,6 @@
 import time
+
+from aiogram.types import ContentType
 from loguru import logger
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher import filters
@@ -9,11 +11,20 @@ from utils import *
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from datetime import datetime, timedelta
 import asyncio
+from mailing_state import *
 
 logger.add('debug.log', format='{time} {level} {message}', level='INFO', rotation='15MB', compression='zip')
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
+debug_mode = True
+
+
+@dp.message_handler(filters.IDFilter(user_id=ADMIN_TELEGRAM_ID), commands=['admin'])
+async def get_admin_menu(message: types.Message):
+    '''Функция вывода меню администратора'''
+    await message.answer('Меню администратора', reply_markup=types.ReplyKeyboardRemove())
+    await message.answer('Выберите пункт', reply_markup=get_admin_menu_keyboard())
 
 
 async def interval_schedule(message, post_info, interval):
@@ -42,16 +53,28 @@ async def to_next_post(message, count):
     '''Функция перехода к следующему посту'''
     user_info = await increase_count(message, count)
     post_info = await get_next_post(message, user_info, user_info['current_step'])
-    if post_info['timer']:
+    if post_info['timer'] and not post_info['time']:
         interval = post_info['timer']
     elif post_info['time']:
-        post_time = datetime.strptime(post_info['time'], '%H:%M').time()
-        now_time = datetime.now().time()
+        if debug_mode:
+            correction_time = timedelta(minutes=1055)
+        else:
+            correction_time = timedelta(minutes=0)
+        post_time = (datetime.strptime(post_info['time'], '%H:%M') - correction_time).time()
+        if post_info['timer']:
+            min_interval = timedelta(seconds=post_info['timer'])
+            post_date = (datetime.now() + min_interval).date()
+            now_time = (datetime.now() + min_interval).time()
+        else:
+            post_date = datetime.now().date()
+            now_time = datetime.now().time()
+        logger.info(f'POST DATE - {post_date}')
+        logger.info(f'NOW TIME - {now_time}')
         if post_time > now_time:
-            today = datetime.today()
+            today = post_date
             post_date_time = datetime(today.year, today.month, today.day, post_time.hour, post_time.minute)
         else:
-            tomorrow = datetime.today() + timedelta(days=1)
+            tomorrow = post_date + timedelta(days=1)
             post_date_time = datetime(tomorrow.year, tomorrow.month, tomorrow.day, post_time.hour, post_time.minute)
         interval = post_date_time.timestamp() - time.time()
     else:
@@ -90,7 +113,10 @@ async def send_post(message, post_info):
     if post_info['emoji']:
         await message.answer(post_info['emoji'])
     if post_info['photo'] or post_info['video']:
+        photos = []
         if post_info['photo']:
+            if ',' in post_info['photo']:
+                photos.extend([f'media/photo/{i}' for i in post_info['photo'].split(',')])
             path_to_media = f'media/photo/{post_info["photo"]}'
             message_function = bot.send_photo
         elif post_info['video']:
@@ -99,7 +125,7 @@ async def send_post(message, post_info):
         else:
             path_to_media = None
             message_function = None
-        if path_to_media:
+        if path_to_media and not photos:
             with open(path_to_media, 'rb') as file:
                 media_file = file.read()
         else:
@@ -109,7 +135,13 @@ async def send_post(message, post_info):
         else:
             caption = None
         logger.info(f'POST DATA - {path_to_media} / {message_function} / {caption}')
-        if message_function:
+        if photos:
+            media = types.MediaGroup()
+            for i, path_to_media in enumerate(photos):
+                media.attach_photo(types.InputFile(path_to_media))
+            await bot.send_media_group(message.chat.id, media=media)
+            await bot.send_message(message.chat.id, text=caption, parse_mode='HTML', reply_markup=keyboard)
+        elif message_function:
             await message_function(message.chat.id, media_file, caption=caption, parse_mode='HTML', reply_markup=keyboard)
     elif post_info['text']:
         text = await fill_name(post_info['text'], message.chat.first_name)
@@ -122,6 +154,40 @@ async def send_post(message, post_info):
     if post_info['default_next']:
         await to_next_post(message, post_info['default_next'])
         return
+
+
+async def send_mailing_post(telegram_id, mailing_info, test_mode=False):
+    '''Функция отправки рассылки'''
+    if mailing_info['button_text'] and mailing_info['button_url']:
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(types.InlineKeyboardButton(mailing_info['button_text'], url=mailing_info['button_url']))
+    else:
+        keyboard = None
+    if mailing_info['photo'] or mailing_info['video']:
+        if mailing_info['photo']:
+            path_to_media = mailing_info['photo']
+            message_function = bot.send_photo
+        elif mailing_info['video']:
+            path_to_media = mailing_info['video']
+            message_function = bot.send_video
+        else:
+            path_to_media = None
+            message_function = None
+        if path_to_media:
+            with open(path_to_media, 'rb') as file:
+                media_file = file.read()
+        else:
+            media_file = None
+        if mailing_info['text']:
+            caption = mailing_info['text']
+        else:
+            caption = None
+        logger.info(f'POST DATA - {path_to_media} / {message_function} / {caption}')
+        if message_function:
+            await message_function(telegram_id, media_file, caption=caption, parse_mode='HTML', reply_markup=keyboard)
+    elif mailing_info['text']:
+        text = await mailing_info['text']
+        await bot.send_message(telegram_id, text, parse_mode='HTML', reply_markup=keyboard)
 
 
 @dp.message_handler(commands='start')
@@ -150,9 +216,228 @@ async def process_text_message(message: types.Message):
     await send_post(message, post_info)
 
 
-@dp.message_handler(filters.IDFilter(user_id=ADMIN_TELEGRAM_ID), commands=['admin'])
-async def get_users_count(message: types.Message):
-    await message.answer('Меню администратора', reply_markup=get_admin_menu())
+
+@dp.callback_query_handler(cd_admin.filter())
+async def bot_callback_users_count(callback: types.CallbackQuery, callback_data: dict, state: FSMContext):
+    users_count = len(fetchall('users', []))
+    logger.info(f'USERS COUNT - {users_count}')
+    action = callback_data['action']
+    if action == 'UsersCount':
+        await bot.send_message(callback.message.chat.id, f'Всего пользователей - {str(users_count)}',
+                               reply_markup=get_admin_menu_keyboard())
+    elif action == 'Mailing':
+        # await bot.send_message(callback.message.chat.id, f'Выберите пункт для заполнения',
+        #                        reply_markup=get_create_mailing_keyboard())
+        await bot.send_message(callback.message.chat.id, f'Введите название рассылки',
+                               reply_markup=types.ReplyKeyboardRemove())
+        await CallbackCreateMailing.name_state.set()
+
+
+@dp.callback_query_handler(cd_create_mailing.filter())
+async def bot_callback_create_mailing(callback: types.CallbackQuery, callback_data: dict):
+    field = callback_data['field']
+    logger.info(f'FIELD - {field}')
+    if field == 'name':
+        await bot.send_message(callback.message.chat.id, 'Введите название рассылки')
+        await CallbackCreateMailing.name_state.set()
+    elif field == 'text':
+        await bot.send_message(callback.message.chat.id, 'Введите текст рассылки')
+        await CallbackCreateMailing.text_state.set()
+    elif field == 'datetime':
+        await bot.send_message(callback.message.chat.id, 'Введите дату и время рассылки в формате "ДД.ММ.ГГГГ ЧЧ.ММ"')
+        await CallbackCreateMailing.datetime_state.set()
+    elif field == 'photo':
+        await bot.send_message(callback.message.chat.id, 'Отправьте фото для рассылки')
+        await CallbackCreateMailing.photo_state.set()
+    elif field == 'video':
+        await bot.send_message(callback.message.chat.id, 'Отправьте видео для рассылки')
+        await CallbackCreateMailing.video_state.set()
+    elif field == 'audio':
+        await bot.send_message(callback.message.chat.id, 'Отправьте аудио для рассылки')
+        await CallbackCreateMailing.audio_state.set()
+    elif field == 'tag_id':
+        await bot.send_message(callback.message.chat.id, 'Выберите тег для рассылки', reply_markup=get_tags_keyboard())
+        await CallbackCreateMailing.tags_state.set()
+
+
+@dp.message_handler(state=CallbackCreateMailing.name_state)
+async def set_mailing_name(message: types.Message, state: FSMContext):
+    answer = message.text
+    logger.info(f'ANSWER - {answer}')
+    await state.update_data(name=answer)
+    await message.answer("Введите текст", reply_markup=types.ReplyKeyboardRemove())
+    await CallbackCreateMailing.next()
+
+
+@dp.message_handler(state=CallbackCreateMailing.text_state)
+async def set_mailing_text(message: types.Message, state: FSMContext):
+    answer = message.text
+    logger.info(f'ANSWER - {answer}')
+    await state.update_data(text=answer)
+    await message.answer(f'Введите дату и время рассылки в формате "ДД.ММ.ГГГГ ЧЧ:ММ"',
+                         reply_markup=types.ReplyKeyboardRemove())
+    await CallbackCreateMailing.next()
+
+
+@dp.message_handler(state=CallbackCreateMailing.datetime_state)
+async def set_mailing_datetime(message: types.Message, state: FSMContext):
+    answer = message.text
+    logger.info(f'ANSWER - {answer}')
+    try:
+        datetime_for_mailing = datetime.strptime(answer, '%d.%m.%Y %H:%M')
+        await state.update_data(datetime=answer)
+        await message.answer(f"Отправьте фото для рассылки",
+                             reply_markup=skip_keyboard
+                             )
+        await CallbackCreateMailing.next()
+    except ValueError:
+        logger.debug(f'EXCEPTION')
+        await message.answer(f'Формат некорректный, введите дату и время рассылки в формате "ДД.ММ.ГГГГ ЧЧ:ММ"',
+                             reply_markup=types.ReplyKeyboardRemove())
+        await CallbackCreateMailing.datetime_state.set()
+
+
+@dp.message_handler(content_types=['photo', 'text'], state=CallbackCreateMailing.photo_state)
+async def set_mailing_photo(message: types.Message, state: FSMContext):
+    if message.photo or message.text == 'Пропустить':
+        if message.text == 'Пропустить':
+            await state.update_data(photo=None)
+        elif message.photo:
+            data = await state.get_data()
+            logger.info(f'DATA - {data}')
+            await message.photo[-2].download(destination_dir='media/mailings/')
+            file_info = await message.photo[-2].get_file()
+            path_to_photo = f'media/mailings/{file_info["file_path"]}'
+            await state.update_data(photo=path_to_photo)
+        await message.answer(f'Отправьте видео для рассылки', reply_markup=skip_keyboard)
+        await CallbackCreateMailing.next()
+    else:
+        await message.answer(f'Формат некорректный, отправьте фото для рассылки', reply_markup=skip_keyboard)
+        await CallbackCreateMailing.photo_state.set()
+
+
+@dp.message_handler(content_types=['video', 'text'], state=CallbackCreateMailing.video_state)
+async def set_mailing_video(message: types.Message, state: FSMContext):
+    if message.text == 'Пропустить':
+        await state.update_data(video=None)
+        await message.answer('Выберите тег для рассылки', reply_markup=types.ReplyKeyboardMarkup())
+        await message.answer(f'Список тегов', reply_markup=get_tags_keyboard())
+        await CallbackCreateMailing.next()
+    elif message.video:
+        data = await state.get_data()
+        video_id = message.video.file_id
+        file = await bot.get_file(video_id)
+        logger.info(f'FILE {file}')
+        path_to_file = f'media/mailings/{file.file_path}'
+        logger.info(f'FILE {path_to_file}')
+        await bot.download_file(file.file_path, destination_dir='media/mailings/')
+        await state.update_data(video=path_to_file)
+        await message.answer('Выберите тег для рассылки', reply_markup=types.ReplyKeyboardMarkup())
+        await message.answer(f'Список тегов', reply_markup=get_tags_keyboard())
+        await CallbackCreateMailing.next()
+    else:
+        await message.answer(f'Формат некорректный, отправьте видео для рассылки', reply_markup=skip_keyboard)
+        await CallbackCreateMailing.video_state.set()
+
+
+@dp.callback_query_handler(state=CallbackCreateMailing.tags_state)
+async def set_mailing_tags(callback: types.CallbackQuery, state: FSMContext):
+    logger.info(f'CALLBACK - {callback.data}')
+    tag_id = int(callback.data.replace('cd_create_mailing_tags:', ''))
+    if tag_id == 0:
+        await state.update_data(tags_id=None)
+    else:
+        await state.update_data(tags_id=tag_id)
+    data = await state.get_data()
+    logger.info(f'FINAL DATA = {data}')
+    await bot.send_message(callback.message.chat.id, 'Введите текст кнопки и ссылку кнопки в формате "{button_text}/{button_url}"')
+    await CallbackCreateMailing.next()
+
+
+@dp.message_handler(state=CallbackCreateMailing.button_state)
+async def set_mailing_button(message: types.Message, state: FSMContext):
+    if message.text == 'Пропустить':
+        await state.update_data(button=None)
+        await CallbackCreateMailing.next()
+    if '/' in message.text:
+        button_text, button_url = message.text.split('/', maxsplit=1)
+        await state.update_data(button_text=button_text, button_url=button_url)
+        final_data = await state.get_data()
+        logger.info(f'FINAL DATA - {final_data}')
+
+        await message.answer('Предварительный просмотр', reply_markup=types.ReplyKeyboardRemove())
+        await send_mailing_post(ADMIN_TELEGRAM_ID, final_data)
+        await message.answer(f'Подтверждаете отправку?', reply_markup=get_confirm_keyboard())
+        await CallbackCreateMailing.next()
+    else:
+        await message.answer('Формат некорректный. Введите текст кнопки и ссылку кнопки в формате "{button_text}/{button_url}"', reply_markup=skip_keyboard)
+        await CallbackCreateMailing.button_state.set()
+
+
+async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id):
+    logger.info(f'INTERVAL SCHEDULE STARTED')
+    await asyncio.sleep(interval)
+    for user_ids in users_telegram_id_id:
+        try:
+            await send_mailing_post(user_ids[0], data)
+            column_values = {
+                'mailing_id': mailing_pk,
+                'user_id': user_ids[1],
+                'result': 1,
+            }
+            time.sleep(1)
+            insert('mailings_users', column_values)
+        except Exception:
+            column_values = {
+                'mailing_id': mailing_pk,
+                'user_id': user_ids[1],
+                'result': 0,
+                'error': Exception.__name__
+            }
+            insert('mailings_users', column_values)
+
+
+@dp.callback_query_handler(state=CallbackCreateMailing.confirm_state)
+async def set_mailing_confirm(callback: types.CallbackQuery, state: FSMContext):
+    logger.info(f'CALLBACK - {callback.data}')
+    result = callback.data.replace('cd_confirm:', '')
+    if result == 'accept':
+        logger.info(f'CONFIRM MAILING')
+        data = await state.get_data()
+        start_mailing_time = datetime.strptime(data['datetime'], '%d.%m.%Y %H:%M')
+        interval = start_mailing_time.timestamp() - time.time()
+        logger.info(f'START INTERVAL FOR MAILING - {interval}')
+        if data["tags_id"]:
+            user_ids = [i['id'] for i in fetchall('users_tags', ['id'], f'tag_id = {data["tags_id"]}')]
+        else:
+            user_ids = [i['id'] for i in fetchall('users', ['id'])]
+        logger.info(f'USER IDS - {user_ids}')
+        users_telegram_id_id = [[i['telegram_id'], i['id']] for i in fetchall('users', ['telegram_id', 'id'], f'id in ({", ".join([str(p) for p in user_ids])})')]
+        logger.info(f'USERS TELEGRAM ID - {users_telegram_id_id}')
+        insert('mailings', data)
+        mailing_pk = max([i['id'] for i in fetchall('mailings', ['id'])])
+        logger.info(f'MAILING PK - {mailing_pk}')
+        await launch_mailing(mailing_pk, data, interval, users_telegram_id_id)
+        # await state.update_data(tags_id=None)
+    else:
+        logger.info(f'DECLINE MAILING')
+        # await state.update_data(tags_id=tag_id)
+    await state.finish()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 @dp.callback_query_handler(cd_next_post.filter())

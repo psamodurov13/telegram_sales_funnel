@@ -79,13 +79,44 @@ create table if not exists posts_post_types(
     FOREIGN KEY (post_type_id) REFERENCES post_types (id),
     PRIMARY KEY (post_id, post_type_id)
 );
+create table if not exists mailings(
+    id integer primary key AUTOINCREMENT,
+    name text,
+    text text,
+    datetime datetime,
+    photo text,
+    video text,
+    tags_id integer,
+    button_text text,
+    button_url text,
+    FOREIGN KEY (tags_id) REFERENCES tags (id)
+);
+create table if not exists mailings_users(
+    mailing_id integer,
+    user_id integer,
+    result bool,
+    error text,
+    FOREIGN KEY (mailing_id) REFERENCES mailings (id),
+    FOREIGN KEY (user_id) REFERENCES users (id)
+);
     
 insert into actions(name) values ('Ссылка');
 insert into actions(name) values ('Следующий пост');
 
 insert into tags(name) values 
 ('Вступил в прогрев'),
-('Забрал подарок');
+('Забрал подарок'),
+('Кон 1й день (Прогрев)'),
+('Кон 2й день (Прогрев)'),
+('Кон 3й день (Прогрев)'),
+('Кон 5й день (Прогрев)'),
+('Кон 6й день (Прогрев)'),
+('Кон 7й день (Прогрев)'),
+('Кон 8й день (Прогрев)'),
+('Кон 9й день (Прогрев)'),
+('Кон 10й день (Прогрев)'),
+('Кон 13й день (Прогрев)'),
+('Кон 18й день (Прогрев)');
 
 insert into post_types(name) values 
 ('Элемент воронки'),
