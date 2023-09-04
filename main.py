@@ -2,6 +2,7 @@ import time
 
 from aiogram.types import ContentType
 from loguru import logger
+from aiogram.utils.exceptions import BotBlocked
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher import filters
 from config import *
@@ -12,12 +13,13 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from datetime import datetime, timedelta
 import asyncio
 from mailing_state import *
+import random as rd
 
 logger.add('debug.log', format='{time} {level} {message}', level='INFO', rotation='15MB', compression='zip')
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
-debug_mode = True
+debug_mode = False
 
 
 @dp.message_handler(filters.IDFilter(user_id=ADMIN_TELEGRAM_ID), commands=['admin'])
@@ -57,10 +59,10 @@ async def to_next_post(message, count):
         interval = post_info['timer']
     elif post_info['time']:
         if debug_mode:
-            correction_time = timedelta(minutes=1055)
+            correction_time = timedelta(minutes=150)
         else:
             correction_time = timedelta(minutes=0)
-        post_time = (datetime.strptime(post_info['time'], '%H:%M') - correction_time).time()
+        post_time = (datetime.strptime(post_info['time'], '%H:%M') + correction_time).time()
         if post_info['timer']:
             min_interval = timedelta(seconds=post_info['timer'])
             post_date = (datetime.now() + min_interval).date()
@@ -76,7 +78,7 @@ async def to_next_post(message, count):
         else:
             tomorrow = post_date + timedelta(days=1)
             post_date_time = datetime(tomorrow.year, tomorrow.month, tomorrow.day, post_time.hour, post_time.minute)
-        interval = post_date_time.timestamp() - time.time()
+        interval = post_date_time.timestamp() - time.time() + rd.randint(10, 50)/10
     else:
         interval = 60
         logger.debug(f'DEFAULT INTERVAL FOR {post_info}')
@@ -377,6 +379,8 @@ async def set_mailing_button(message: types.Message, state: FSMContext):
 async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id):
     logger.info(f'INTERVAL SCHEDULE STARTED')
     await asyncio.sleep(interval)
+    success_mails = 0
+    errors_mails = 0
     for user_ids in users_telegram_id_id:
         try:
             await send_mailing_post(user_ids[0], data)
@@ -385,8 +389,9 @@ async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id):
                 'user_id': user_ids[1],
                 'result': 1,
             }
-            time.sleep(1)
+            time.sleep(rd.randint(10, 50)/10)
             insert('mailings_users', column_values)
+            success_mails += 1
         except Exception:
             column_values = {
                 'mailing_id': mailing_pk,
@@ -395,6 +400,8 @@ async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id):
                 'error': Exception.__name__
             }
             insert('mailings_users', column_values)
+            errors_mails += 1
+    return success_mails, errors_mails
 
 
 @dp.callback_query_handler(state=CallbackCreateMailing.confirm_state)
@@ -406,6 +413,7 @@ async def set_mailing_confirm(callback: types.CallbackQuery, state: FSMContext):
         data = await state.get_data()
         start_mailing_time = datetime.strptime(data['datetime'], '%d.%m.%Y %H:%M')
         interval = start_mailing_time.timestamp() - time.time()
+        await bot.send_message(callback.message.chat.id, f'Рассылка запланирована и будет запущена через {interval} секунд')
         logger.info(f'START INTERVAL FOR MAILING - {interval}')
         if data["tags_id"]:
             user_ids = [i['id'] for i in fetchall('users_tags', ['id'], f'tag_id = {data["tags_id"]}')]
@@ -417,8 +425,11 @@ async def set_mailing_confirm(callback: types.CallbackQuery, state: FSMContext):
         insert('mailings', data)
         mailing_pk = max([i['id'] for i in fetchall('mailings', ['id'])])
         logger.info(f'MAILING PK - {mailing_pk}')
-        await launch_mailing(mailing_pk, data, interval, users_telegram_id_id)
+        success, errors = await launch_mailing(mailing_pk, data, interval, users_telegram_id_id)
         # await state.update_data(tags_id=None)
+        await bot.send_message(callback.message.chat.id, f'''Рассылка завершена. 
+Доставлено - {success}, 
+недоставлено - {errors}''')
     else:
         logger.info(f'DECLINE MAILING')
         # await state.update_data(tags_id=tag_id)
@@ -447,9 +458,20 @@ async def bot_callback_next_post(callback: types.CallbackQuery, callback_data: d
     logger.info(f'POST INFO - {post_info}')
     await send_post(callback.message, post_info)
 
+
+async def on_startup(_):
+    users = [i['telegram_id'] for i in fetchall('users', ['telegram_id'])]
+    for user in users:
+        try:
+            await bot.send_message(user, 'Перезапустились. Отправь команду /start')
+            await asyncio.sleep(rd.randint(10, 50)/10)
+        except BotBlocked:
+            continue
+
+
 @logger.catch()
 def main():
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
 
 
 if __name__ == '__main__':
