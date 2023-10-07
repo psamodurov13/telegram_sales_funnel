@@ -5,7 +5,8 @@ import sqlite3
 from loguru import logger
 from datetime import date, datetime
 
-conn = sqlite3.connect("telegram_sales_funnel.db")
+# conn = sqlite3.connect("telegram_sales_funnel.db")
+conn = sqlite3.connect('/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/db.sqlite3')
 cursor = conn.cursor()
 
 

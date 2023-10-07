@@ -1,5 +1,6 @@
 import time
 
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.types import ContentType
 from loguru import logger
 from aiogram.utils.exceptions import BotBlocked
@@ -55,6 +56,8 @@ async def to_next_post(message, count):
     '''Функция перехода к следующему посту'''
     user_info = await increase_count(message, count)
     post_info = await get_next_post(message, user_info, user_info['current_step'])
+    logger.info(f'USER_INFO - {user_info}')
+    logger.info(f'POST_INFO - {post_info}')
     if post_info['timer'] and not post_info['time']:
         interval = post_info['timer']
     elif post_info['time']:
@@ -80,7 +83,11 @@ async def to_next_post(message, count):
             post_date_time = datetime(tomorrow.year, tomorrow.month, tomorrow.day, post_time.hour, post_time.minute)
         interval = post_date_time.timestamp() - time.time() + rd.randint(10, 50)/10
     else:
-        interval = 60
+        # if user_info['current_step'] == 1:
+        #     interval = 1
+        # else:
+        #     interval = 60
+        interval = 2
         logger.debug(f'DEFAULT INTERVAL FOR {post_info}')
     logger.info(f'INTERVAL - {interval}')
     asyncio.create_task(interval_schedule(message, post_info, interval))
@@ -188,7 +195,7 @@ async def send_mailing_post(telegram_id, mailing_info, test_mode=False):
         if message_function:
             await message_function(telegram_id, media_file, caption=caption, parse_mode='HTML', reply_markup=keyboard)
     elif mailing_info['text']:
-        text = await mailing_info['text']
+        text = mailing_info['text']
         await bot.send_message(telegram_id, text, parse_mode='HTML', reply_markup=keyboard)
 
 
@@ -208,7 +215,8 @@ async def start(message: types.Message, state: FSMContext):
         message.from_user.full_name,
     )
     post_info = get_post(user_info['telegram_id'])
-    await send_post(message, post_info)
+    # await send_post(message, post_info)
+    await to_next_post(message, user_info['current_step'])
 
 
 @dp.message_handler(content_types=['text'])
@@ -459,14 +467,7 @@ async def bot_callback_next_post(callback: types.CallbackQuery, callback_data: d
     await send_post(callback.message, post_info)
 
 
-async def on_startup(_):
-    users = [i['telegram_id'] for i in fetchall('users', ['telegram_id'])]
-    for user in users:
-        try:
-            await bot.send_message(user, 'Перезапустились. Отправь команду /start')
-            await asyncio.sleep(rd.randint(10, 50)/10)
-        except BotBlocked:
-            continue
+
 
 
 @logger.catch()
@@ -474,8 +475,58 @@ def main():
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
 
 
+bots_info = fetchall('bots_bot', [])
+bots = []
+dispatchers = []
+logger.info(f'BOTS - {bots_info}')
+
+# Создаем экземпляры ботов и диспетчеров для каждого токена
+for bot_info in bots_info:
+    bot = Bot(token=bot_info['token'])
+    dispatcher = Dispatcher(bot)
+    dispatcher.middleware.setup(LoggingMiddleware())
+    bots.append(bot)
+    dispatchers.append(dispatcher)
+
+logger.info(f'BOTS - {bots}')
+logger.info(f'DISP - {dispatchers}')
+
+# Обработчики команд и сообщений для каждого бота
+for dp in dispatchers:
+    @dp.message_handler(commands=['start'])
+    async def on_start(message: types.Message):
+        await message.answer("Привет! Это один из ваших ботов.")
+
+
+async def on_startup(bot):
+    # users = [i['telegram_id'] for i in fetchall('users', ['telegram_id'])]
+    users = [720023902, 5779698994]
+    for user in users:
+        try:
+            await bot.send_message(user, 'Перезапустились. Отправь команду /start')
+            await asyncio.sleep(rd.randint(10, 50) / 10)
+        except Exception:
+            continue
+
+
+# Запускаем ботов
+async def start_bots():
+    tasks = []
+    for dispatcher in dispatchers:
+        task = dispatcher.start_polling()
+        tasks.append(task)
+        logger.info(f'TASK ADDED')
+    for bot in bots:
+        await on_startup(bot)
+        logger.info(f'ON STARTUP LAUNCHED')
+    await asyncio.gather(*tasks)
+
+
+
 if __name__ == '__main__':
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start_bots())
+    loop.run_forever()
 
 
 
