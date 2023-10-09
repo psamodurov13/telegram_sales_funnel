@@ -66,11 +66,12 @@ def get_confirm_keyboard():
 def get_keyboard(buttons):
     keys = []
     for button in buttons:
+        logger.info(f'BUTTON {button}')
         if button['button_url']:
             key = types.InlineKeyboardButton(text=button['button_text'], url=button['button_url'])
-        elif button['next_post']:
+        elif button['next_post_id']:
             key = types.InlineKeyboardButton(text=button['button_text'], callback_data=cd_next_post.new(
-                next_post=button['next_post']
+                next_post=button['next_post_id']
             ))
         else:
             key = None
