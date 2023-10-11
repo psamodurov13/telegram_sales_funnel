@@ -6,7 +6,8 @@ from loguru import logger
 from datetime import date, datetime
 
 # conn = sqlite3.connect("telegram_sales_funnel.db")
-conn = sqlite3.connect('/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/db.sqlite3')
+conn = sqlite3.connect('/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/db.sqlite3',
+                       check_same_thread=False)
 cursor = conn.cursor()
 
 
@@ -50,9 +51,9 @@ def delete(table: str, row_id: int) -> None:
     conn.commit()
 
 
-def edit(table: str, filter_column: str, filter_value: str, new_column: str, new_value: str):
+def edit(table: str, filter_column: str, filter_value: str, new_column: str, new_value):
     logger.info(f'QUERY UPDATE {table} SET {new_column} = {new_value} WHERE {filter_column} = {filter_value}')
-    if filter_column in ['telegram_id']:
+    if filter_column in ['telegram_id', 'is_completed']:
         cursor.execute(f"UPDATE {table} SET {new_column} = {new_value} WHERE {filter_column} = {filter_value}")
     else:
         cursor.execute(f"UPDATE {table} SET {new_column} = '{new_value}' WHERE {filter_column} = {filter_value}")
@@ -115,7 +116,8 @@ def add_user(
         insert('bots_currentsteps', {
             'bot_id': bot_id,
             'subscriber_id': subscriber_id,
-            'current_step': current_step_post['count']
+            'current_step': current_step_post['count'],
+            'is_completed': 0
         })
         logger.info(f'USER {user_telegram_id} WAS ADDED TO DB')
 
@@ -130,7 +132,8 @@ def add_user(
             insert('bots_currentsteps', {
                 'bot_id': bot_id,
                 'subscriber_id': subscriber_id,
-                'current_step': start_step['count']
+                'current_step': start_step['count'],
+                'is_completed': 0
             })
             logger.info(f'USER {user_telegram_id} WAS ADDED TO DB EARLY, BUT NOW NEW CURRENT STEP ROW WAS CREATED IN DB')
     user_info = get_user(user_telegram_id)
@@ -138,17 +141,18 @@ def add_user(
     return user_info
 
 
-def get_current_step(telegram_id, bot_username):
+def get_current_step(telegram_id, bot_username, parameter_to_return='id'):
     bot_id = get_bot_id(bot_username)
+    logger.info(f'BOT ID {bot_id}')
     subscriber_id = get_subscriber_id(telegram_id)
     current_steps = fetchall('bots_currentsteps', [],
                              f'subscriber_id = {subscriber_id} and bot_id = {bot_id}')
     if current_steps:
-        current_step = current_steps[0]['id']
+        current_step = current_steps[0][parameter_to_return]
     else:
         start_step = fetchall('bots_currentsteps', [],
                              f"subscriber_id = {subscriber_id} and bot_id = {bot_id} and current_step = 'start' ")[0]
-        current_step = start_step['id']
+        current_step = start_step[parameter_to_return]
     return current_step
 
 
