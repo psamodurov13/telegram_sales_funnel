@@ -7,6 +7,7 @@ class CallbackCreateMailing(StatesGroup):
     datetime_state = State()
     photo_state = State()
     video_state = State()
+    # audio_state = State()
     tags_state = State()
     button_state = State()
     confirm_state = State()

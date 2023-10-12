@@ -20,7 +20,7 @@ import nest_asyncio
 
 logger.add('debug.log', format='{time} {level} {message}', level='INFO', rotation='15MB', compression='zip')
 # bot = Bot(token=TOKEN)
-storage = MemoryStorage()
+# storage = MemoryStorage()
 # dp = Dispatcher(bot, storage=storage)
 debug_mode = False
 base_media_path = '/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/media/'
@@ -42,7 +42,8 @@ def main():
     # Создаем экземпляры ботов и диспетчеров для каждого токена
     for bot_info in bots_info:
         bot = Bot(token=bot_info['token'])
-        dispatcher = Dispatcher(bot)
+        storage = MemoryStorage()
+        dispatcher = Dispatcher(bot, storage=storage)
         dispatcher.middleware.setup(LoggingMiddleware())
         bots.append(bot)
         dispatchers.append(dispatcher)
@@ -161,20 +162,23 @@ def main():
             else:
                 logger.info(f'TAG {i} WAS NOT ADDED FOR USER {telegram_id}')
 
-    async def send_mailing_post(telegram_id, mailing_info, test_mode=False):
+    async def send_mailing_post(telegram_id, mailing_info, tg_bot, test_mode=False):
         '''Функция отправки рассылки'''
-        if mailing_info['button_text'] and mailing_info['button_url']:
-            keyboard = types.InlineKeyboardMarkup()
-            keyboard.add(types.InlineKeyboardButton(mailing_info['button_text'], url=mailing_info['button_url']))
+        if 'button_text' in mailing_info.keys() and 'button_url' in mailing_info.keys():
+            if mailing_info['button_text'] and mailing_info['button_url']:
+                keyboard = types.InlineKeyboardMarkup()
+                keyboard.add(types.InlineKeyboardButton(mailing_info['button_text'], url=mailing_info['button_url']))
+            else:
+                keyboard = None
         else:
             keyboard = None
         if mailing_info['photo'] or mailing_info['video']:
             if mailing_info['photo']:
                 path_to_media = mailing_info['photo']
-                message_function = bot.send_photo
+                message_function = tg_bot.send_photo
             elif mailing_info['video']:
                 path_to_media = mailing_info['video']
-                message_function = bot.send_video
+                message_function = tg_bot.send_video
             else:
                 path_to_media = None
                 message_function = None
@@ -193,32 +197,33 @@ def main():
                                        reply_markup=keyboard)
         elif mailing_info['text']:
             text = mailing_info['text']
-            await bot.send_message(telegram_id, text, parse_mode='HTML', reply_markup=keyboard)
+            await tg_bot.send_message(telegram_id, text, parse_mode='HTML', reply_markup=keyboard)
 
-    async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id):
+    async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id, bot):
         logger.info(f'INTERVAL SCHEDULE STARTED')
         await asyncio.sleep(interval)
         success_mails = 0
         errors_mails = 0
         for user_ids in users_telegram_id_id:
             try:
-                await send_mailing_post(user_ids[0], data)
+                await send_mailing_post(user_ids[0], data, bot)
                 column_values = {
                     'mailing_id': mailing_pk,
-                    'user_id': user_ids[1],
+                    'subscriber_id': user_ids[1],
                     'result': 1,
                 }
                 time.sleep(rd.randint(10, 50) / 10)
-                insert('mailings_users', column_values)
+                insert('bots_mailingdelivery', column_values)
                 success_mails += 1
             except Exception:
+                logger.exception(Exception)
                 column_values = {
                     'mailing_id': mailing_pk,
-                    'user_id': user_ids[1],
+                    'subscriber_id': user_ids[1],
                     'result': 0,
                     'error': Exception.__name__
                 }
-                insert('mailings_users', column_values)
+                insert('bots_mailingdelivery', column_values)
                 errors_mails += 1
         return success_mails, errors_mails
 
@@ -244,8 +249,11 @@ def main():
             if post_info['photo'] or post_info['video']:
                 photos = []
                 if post_info['photo']:
-                    if ',' in post_info['photo']:
-                        photos.extend([f'media/photo/{i}' for i in post_info['photo'].split(',')])
+                    if post_info['photo2'] or post_info['photo3'] or post_info['photo4'] or post_info['photo5']:
+                        for i in ['photo', 'photo2', 'photo3', 'photo4', 'photo5']:
+                            if post_info[i]:
+                                photos.append(f'{base_media_path}{post_info[i]}')
+                        # photos.extend([f'media/photo/{i}' for i in post_info['photo'].split(',')])
                     path_to_media = f'{base_media_path}{post_info["photo"]}'
                     message_function = bot.send_photo
                 elif post_info['video']:
@@ -342,16 +350,19 @@ def main():
 
         @dp.callback_query_handler(cd_admin.filter())
         async def bot_callback_users_count(callback: types.CallbackQuery, callback_data: dict, state: FSMContext):
-            users_count = len(fetchall('users', []))
+            logger.info(f'CALLBACK - {callback}')
+            bots_info = await callback.message.bot.get_me()
+            bot_id = get_bot_id(bots_info['username'])
+            users_count = len(fetchall('bots_currentsteps', [], f'bot_id = {bot_id}'))
             logger.info(f'USERS COUNT - {users_count}')
             action = callback_data['action']
             if action == 'UsersCount':
-                await bot.send_message(callback.message.chat.id, f'Всего пользователей - {str(users_count)}',
+                await callback.message.bot.send_message(callback.message.chat.id, f'Всего пользователей - {str(users_count)}',
                                        reply_markup=get_admin_menu_keyboard())
             elif action == 'Mailing':
                 # await bot.send_message(callback.message.chat.id, f'Выберите пункт для заполнения',
                 #                        reply_markup=get_create_mailing_keyboard())
-                await bot.send_message(callback.message.chat.id, f'Введите название рассылки',
+                await callback.message.bot.send_message(callback.message.chat.id, f'Введите название рассылки',
                                        reply_markup=types.ReplyKeyboardRemove())
                 await CallbackCreateMailing.name_state.set()
 
@@ -361,26 +372,26 @@ def main():
             field = callback_data['field']
             logger.info(f'FIELD - {field}')
             if field == 'name':
-                await bot.send_message(callback.message.chat.id, 'Введите название рассылки')
+                await callback.message.bot.send_message(callback.message.chat.id, 'Введите название рассылки')
                 await CallbackCreateMailing.name_state.set()
             elif field == 'text':
-                await bot.send_message(callback.message.chat.id, 'Введите текст рассылки')
+                await callback.message.bot.send_message(callback.message.chat.id, 'Введите текст рассылки')
                 await CallbackCreateMailing.text_state.set()
             elif field == 'datetime':
-                await bot.send_message(callback.message.chat.id,
+                await callback.message.bot.send_message(callback.message.chat.id,
                                        'Введите дату и время рассылки в формате "ДД.ММ.ГГГГ ЧЧ.ММ"')
                 await CallbackCreateMailing.datetime_state.set()
             elif field == 'photo':
-                await bot.send_message(callback.message.chat.id, 'Отправьте фото для рассылки')
+                await callback.message.bot.send_message(callback.message.chat.id, 'Отправьте фото для рассылки')
                 await CallbackCreateMailing.photo_state.set()
             elif field == 'video':
-                await bot.send_message(callback.message.chat.id, 'Отправьте видео для рассылки')
+                await callback.message.bot.send_message(callback.message.chat.id, 'Отправьте видео для рассылки')
                 await CallbackCreateMailing.video_state.set()
-            elif field == 'audio':
-                await bot.send_message(callback.message.chat.id, 'Отправьте аудио для рассылки')
-                await CallbackCreateMailing.audio_state.set()
+            # elif field == 'audio':
+            #     await callback.message.bot.send_message(callback.message.chat.id, 'Отправьте аудио для рассылки')
+            #     await CallbackCreateMailing.audio_state.set()
             elif field == 'tag_id':
-                await bot.send_message(callback.message.chat.id, 'Выберите тег для рассылки',
+                await callback.message.bot.send_message(callback.message.chat.id, 'Выберите тег для рассылки',
                                        reply_markup=get_tags_keyboard())
                 await CallbackCreateMailing.tags_state.set()
 
@@ -451,11 +462,11 @@ def main():
             elif message.video:
                 data = await state.get_data()
                 video_id = message.video.file_id
-                file = await bot.get_file(video_id)
+                file = await message.bot.get_file(video_id)
                 logger.info(f'FILE {file}')
                 path_to_file = f'media/mailings/{file.file_path}'
                 logger.info(f'FILE {path_to_file}')
-                await bot.download_file(file.file_path, destination_dir='media/mailings/')
+                await message.bot.download_file(file.file_path, destination_dir='media/mailings/')
                 await state.update_data(video=path_to_file)
                 await message.answer('Выберите тег для рассылки', reply_markup=types.ReplyKeyboardMarkup())
                 await message.answer(f'Список тегов', reply_markup=get_tags_keyboard())
@@ -475,7 +486,7 @@ def main():
                 await state.update_data(tags_id=tag_id)
             data = await state.get_data()
             logger.info(f'FINAL DATA = {data}')
-            await bot.send_message(callback.message.chat.id,
+            await callback.message.bot.send_message(callback.message.chat.id,
                                    'Введите текст кнопки и ссылку кнопки в формате "{button_text}/{button_url}"')
             await CallbackCreateMailing.next()
 
@@ -484,15 +495,21 @@ def main():
         async def set_mailing_button(message: types.Message, state: FSMContext):
             if message.text == 'Пропустить':
                 await state.update_data(button=None)
+                final_data = await state.get_data()
+                logger.info(f'FINAL DATA - {final_data}')
+
+                await message.answer('Предварительный просмотр', reply_markup=types.ReplyKeyboardRemove())
+                await send_mailing_post(ADMIN_TELEGRAM_ID, final_data, message.bot)
+                await message.answer(f'Подтверждаете отправку?', reply_markup=get_confirm_keyboard())
                 await CallbackCreateMailing.next()
-            if '/' in message.text:
+            elif '/' in message.text:
                 button_text, button_url = message.text.split('/', maxsplit=1)
                 await state.update_data(button_text=button_text, button_url=button_url)
                 final_data = await state.get_data()
                 logger.info(f'FINAL DATA - {final_data}')
 
                 await message.answer('Предварительный просмотр', reply_markup=types.ReplyKeyboardRemove())
-                await send_mailing_post(ADMIN_TELEGRAM_ID, final_data)
+                await send_mailing_post(ADMIN_TELEGRAM_ID, final_data, message.bot)
                 await message.answer(f'Подтверждаете отправку?', reply_markup=get_confirm_keyboard())
                 await CallbackCreateMailing.next()
             else:
@@ -511,23 +528,47 @@ def main():
                 data = await state.get_data()
                 start_mailing_time = datetime.strptime(data['datetime'], '%d.%m.%Y %H:%M')
                 interval = start_mailing_time.timestamp() - time.time()
-                await bot.send_message(callback.message.chat.id,
+                await callback.message.bot.send_message(callback.message.chat.id,
                                        f'Рассылка запланирована и будет запущена через {interval} секунд')
                 logger.info(f'START INTERVAL FOR MAILING - {interval}')
+                bot_info = await callback.message.bot.get_me()
+                bot_id = get_bot_id(bot_info['username'])
                 if data["tags_id"]:
-                    user_ids = [i['id'] for i in fetchall('users_tags', ['id'], f'tag_id = {data["tags_id"]}')]
+                    subscribers_ids = [i['id'] for i in fetchall('bots_currentsteps', [], f'bot_id = {bot_id}')]
+                    subscribers_ids_tag = [i['subscribers_id'] for i in fetchall('bots_subscribers_tags', [], f'tags_id = {data["tags_id"]} and subscribers_id in ({", ".join(subscribers_ids)})')]
+                    user_ids = [i['telegram_id'] for i in fetchall('bots_subscribers', [], f'id in ({", ".join([str(p) for p in subscribers_ids_tag])})')]
+                    logger.info(f'USERS IDS {user_ids}')
+                    # user_ids = [i['id'] for i in fetchall('users_tags', ['id'], f'tag_id = {data["tags_id"]}')]
                 else:
-                    user_ids = [i['id'] for i in fetchall('users', ['id'])]
+                    subscribers_ids = [i['subscriber_id'] for i in fetchall('bots_currentsteps', [], f'bot_id = {bot_id}')]
+                    user_ids = [[i['telegram_id'], i['id']] for i in fetchall('bots_subscribers', [], f'id in ({", ".join([str(p) for p in subscribers_ids])})')]
+                    # user_ids = [i['id'] for i in fetchall('users', ['id'])]
                 logger.info(f'USER IDS - {user_ids}')
-                users_telegram_id_id = [[i['telegram_id'], i['id']] for i in fetchall('users', ['telegram_id', 'id'],
-                                                                                      f'id in ({", ".join([str(p) for p in user_ids])})')]
+                # users_telegram_id_id = [[i['telegram_id'], i['id']] for i in fetchall('bots_subscribers', ['telegram_id', 'id'],
+                #                                                                       f'id in ({", ".join([str(p) for p in user_ids])})')]
+                users_telegram_id_id = user_ids
                 logger.info(f'USERS TELEGRAM ID - {users_telegram_id_id}')
-                insert('mailings', data)
-                mailing_pk = max([i['id'] for i in fetchall('mailings', ['id'])])
+                logger.info(f'subscribers_ids - {subscribers_ids}')
+                logger.info(f'DATA - {data}')
+                start_time = datetime.strptime(data['datetime'], '%d.%m.%Y %H:%M')
+                data_for_db = {
+                    'name': data['name'],
+                    'text': data.get('text', None),
+                    'time': start_time,
+                    'photo': data.get('photo', None),
+                    'video': data.get('video', None),
+                    'tag_id': data.get('tags_id', None),
+                    'bot_id': bot_id,
+                    'button_text': data.get('button_text', None),
+                    'button_url': data.get('button_url', None),
+                }
+                logger.info(f'DATA FOR DB {data_for_db}')
+                insert('bots_mailings', data_for_db)
+                mailing_pk = max([i['id'] for i in fetchall('bots_mailings', ['id'])])
                 logger.info(f'MAILING PK - {mailing_pk}')
-                success, errors = await launch_mailing(mailing_pk, data, interval, users_telegram_id_id)
+                success, errors = await launch_mailing(mailing_pk, data_for_db, interval, users_telegram_id_id, callback.message.bot)
                 # await state.update_data(tags_id=None)
-                await bot.send_message(callback.message.chat.id, f'''Рассылка завершена. 
+                await callback.message.bot.send_message(callback.message.chat.id, f'''Рассылка завершена. 
         Доставлено - {success}, 
         недоставлено - {errors}''')
             else:
@@ -546,7 +587,6 @@ def main():
             post_info = get_post(callback['from']['id'], callback['message']['from']['username'], next_post_id, get_by_id=True)
             logger.info(f'POST INFO - {post_info}')
             await send_post(callback.message, post_info)
-
 
     async def on_startup(bot):
         users = [i['telegram_id'] for i in fetchall('bots_subscribers', ['telegram_id'])]

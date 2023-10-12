@@ -33,8 +33,9 @@ def restart_bots(token):
 
 
 # with app.app_context():
-#     main()
-    # future = executor.submit(main)
+#     global future
+#     # restart_bots(API_TOKEN)
+#     future = executor.submit(main)
 
 
 if __name__ == '__main__':

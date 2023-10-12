@@ -40,7 +40,7 @@ def get_create_mailing_keyboard():
 
 
 def get_tags_keyboard():
-    tags = fetchall('tags', ['id', 'name'])
+    tags = fetchall('bots_tags', ['id', 'name'])
     keyboard = types.InlineKeyboardMarkup()
     for tag in tags:
         keyboard.add(types.InlineKeyboardButton(text=tag['name'], callback_data=cd_create_mailing_tags.new(
