@@ -15,29 +15,27 @@ from datetime import datetime, timedelta
 import asyncio
 from mailing_state import *
 import random as rd
+
 import nest_asyncio
 # nest_asyncio.apply()
 
 logger.add('debug.log', format='{time} {level} {message}', level='INFO', rotation='15MB', compression='zip')
-# bot = Bot(token=TOKEN)
-# storage = MemoryStorage()
-# dp = Dispatcher(bot, storage=storage)
 debug_mode = False
 base_media_path = '/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/media/'
 
 
-
 tasks = []
+bot_objects = []
+client_loop = None
 
 @logger.catch()
 def main():
-    # executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
-
     bots_info = fetchall('bots_bot', [])
     bots = []
     dispatchers = []
     logger.info(f'BOTS - {bots_info}')
     logger.info(f'DISPATCHERS - {dispatchers}')
+
 
     # Создаем экземпляры ботов и диспетчеров для каждого токена
     for bot_info in bots_info:
@@ -50,6 +48,9 @@ def main():
 
     logger.info(f'BOTS - {bots}')
     logger.info(f'DISP - {dispatchers}')
+    global bot_objects
+    bot_objects = bots
+    logger.info(f'BOT OBJECTS FROM MAIN - {bot_objects}')
 
     async def interval_schedule(message, post_info, interval, bot=None, chat=None):
         '''Функция отправки поста с определенным интервалом'''
@@ -111,7 +112,7 @@ def main():
                 correction_time = timedelta(minutes=150)
             else:
                 correction_time = timedelta(minutes=0)
-            post_time = (datetime.strptime(post_info['time'], '%H:%M') + correction_time).time()
+            post_time = (datetime.strptime(post_info['time'], '%H:%M:%S') + correction_time).time()
             if post_info['timer']:
                 min_interval = timedelta(seconds=post_info['timer'])
                 post_date = (datetime.now() + min_interval).date()
@@ -183,7 +184,7 @@ def main():
                 path_to_media = None
                 message_function = None
             if path_to_media:
-                with open(path_to_media, 'rb') as file:
+                with open(f'{base_media_path}{path_to_media}', 'rb') as file:
                     media_file = file.read()
             else:
                 media_file = None
@@ -199,11 +200,16 @@ def main():
             text = mailing_info['text']
             await tg_bot.send_message(telegram_id, text, parse_mode='HTML', reply_markup=keyboard)
 
+
     async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id, bot):
         logger.info(f'INTERVAL SCHEDULE STARTED')
         await asyncio.sleep(interval)
         success_mails = 0
         errors_mails = 0
+        mailingdelivery_rows = [i['id'] for i in fetchall('bots_mailingdelivery', [], f'mailing_id = {mailing_pk}')]
+        if mailingdelivery_rows:
+            for i in mailingdelivery_rows:
+                delete('bots_mailingdelivery', i)
         for user_ids in users_telegram_id_id:
             try:
                 await send_mailing_post(user_ids[0], data, bot)
@@ -536,7 +542,7 @@ def main():
                 if data["tags_id"]:
                     subscribers_ids = [i['id'] for i in fetchall('bots_currentsteps', [], f'bot_id = {bot_id}')]
                     subscribers_ids_tag = [i['subscribers_id'] for i in fetchall('bots_subscribers_tags', [], f'tags_id = {data["tags_id"]} and subscribers_id in ({", ".join(subscribers_ids)})')]
-                    user_ids = [i['telegram_id'] for i in fetchall('bots_subscribers', [], f'id in ({", ".join([str(p) for p in subscribers_ids_tag])})')]
+                    user_ids = [[i['telegram_id'], i['id']] for i in fetchall('bots_subscribers', [], f'id in ({", ".join([str(p) for p in subscribers_ids_tag])})')]
                     logger.info(f'USERS IDS {user_ids}')
                     # user_ids = [i['id'] for i in fetchall('users_tags', ['id'], f'tag_id = {data["tags_id"]}')]
                 else:
@@ -575,6 +581,58 @@ def main():
                 logger.info(f'DECLINE MAILING')
                 # await state.update_data(tags_id=tag_id)
             await state.finish()
+
+
+        @dp.callback_query_handler(cd_confirm_from_admin.filter())
+        async def set_mailing_confirm_from_admin(callback: types.CallbackQuery, callback_data: dict):
+            logger.info(f'CALLBACK - {callback}')
+            logger.info(f'CALLBACK DATA - {callback.data}')
+
+            result = callback.data.replace('cd_confirm_from_admin:', '')
+            button, mailing_pk = result.split(':')
+            logger.info(f'BUTTON {button}, MAILING PK {mailing_pk}')
+            if button == 'accept_admin':
+                mailing_info = fetchall('bots_mailings', [], f'id = {mailing_pk}')[0]
+                logger.info(f'MAILING INFO {mailing_info}')
+                start_mailing_time = datetime.strptime(mailing_info['time'], '%Y-%m-%d %H:%M:%S')
+                interval = start_mailing_time.timestamp() - time.time()
+                logger.info(f'TIME - {interval}')
+                await callback.message.bot.send_message(callback.message.chat.id,
+                                                        f'Рассылка запланирована и будет запущена через {interval} секунд')
+                logger.info(f'START INTERVAL FOR MAILING - {interval}')
+                bot_info = await callback.message.bot.get_me()
+                bot_id = get_bot_id(bot_info['username'])
+                if mailing_info["tag_id"]:
+                    subscribers_ids = [i['subscriber_id'] for i in fetchall('bots_currentsteps', [], f'bot_id = {bot_id}')]
+                    subscribers_ids_tag = [i['subscribers_id'] for i in fetchall('bots_subscribers_tags', [],
+                                                                                 f'tags_id = {mailing_info["tag_id"]} and subscribers_id in ({", ".join([str(p) for p in subscribers_ids])})')]
+                    user_ids = [[i['telegram_id'], i['id']] for i in fetchall('bots_subscribers', [],
+                                                                   f'id in ({", ".join([str(p) for p in subscribers_ids_tag])})')]
+                    logger.info(f'USERS IDS {user_ids}')
+                else:
+                    subscribers_ids = [i['subscriber_id'] for i in
+                                       fetchall('bots_currentsteps', [], f'bot_id = {bot_id}')]
+                    user_ids = [[i['telegram_id'], i['id']] for i in fetchall('bots_subscribers', [],
+                                                                              f'id in ({", ".join([str(p) for p in subscribers_ids])})')]
+                logger.info(f'USER IDS - {user_ids}')
+                users_telegram_id_id = user_ids
+                logger.info(f'USERS TELEGRAM ID - {users_telegram_id_id}')
+                logger.info(f'subscribers_ids - {subscribers_ids}')
+                logger.info(f'DATA - {mailing_info}')
+                success, errors = await launch_mailing(mailing_pk, mailing_info, interval, users_telegram_id_id,
+                                                       callback.message.bot)
+                await callback.message.bot.send_message(callback.message.chat.id, f'''Рассылка завершена. 
+                        Доставлено - {success}, 
+                        недоставлено - {errors}''')
+
+
+
+
+
+            else:
+                logger.info(f'DECLINE MAILING')
+                # await state.update_data(tags_id=tag_id)
+            # await state.finish()
 
 
         @dp.callback_query_handler(cd_next_post.filter())
@@ -636,13 +694,17 @@ def main():
                 i.cancel()
                 logger.info(f'LOOP {i} WAS CLOSED')
         loop = asyncio.new_event_loop()
+        global client_loop
+        client_loop = loop
         coroutine = (start_bots())
         task = loop.create_task(coroutine)
         tasks.append(task)
         loop.run_until_complete(task)
+
         # loop.run_forever()
 
     launch()
+
 
 
 if __name__ == '__main__':

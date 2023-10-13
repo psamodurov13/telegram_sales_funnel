@@ -9,6 +9,7 @@ cd_admin = CallbackData('admin', 'action')
 cd_create_mailing = CallbackData('cd_create_mailing', 'field')
 cd_create_mailing_tags = CallbackData('cd_create_mailing_tags', 'tag_id')
 cd_confirm = CallbackData('cd_confirm', 'result')
+cd_confirm_from_admin = CallbackData('cd_confirm_from_admin', 'result', 'mailing_pk')
 
 
 def get_admin_menu_keyboard():
@@ -59,6 +60,25 @@ def get_confirm_keyboard():
     )))
     keyboard.add(types.InlineKeyboardButton(text='Heт', callback_data=cd_confirm.new(
         result='decline'
+    )))
+    return keyboard
+
+
+def get_confirm_keyboard_from_admin(mailing_pk):
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton(text='Да', callback_data=cd_confirm_from_admin.new(
+        result='accept_admin',
+        mailing_pk=mailing_pk,
+        # data=data,
+        # interval=interval,
+        # users_telegram_id_id=users_telegram_id_id
+    )))
+    keyboard.add(types.InlineKeyboardButton(text='Heт', callback_data=cd_confirm_from_admin.new(
+        result='decline',
+        mailing_pk=mailing_pk,
+        # data=data,
+        # interval=interval,
+        # users_telegram_id_id=users_telegram_id_id
     )))
     return keyboard
 
