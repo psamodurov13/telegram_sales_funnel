@@ -4,10 +4,15 @@ from flask import Flask, jsonify, current_app
 from flask import request
 from flask import abort
 from main import *
+from config import prod
 app = Flask(__name__)
 from concurrent.futures import ThreadPoolExecutor
 executor = ThreadPoolExecutor()
-base_media_path = '/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot'
+if prod:
+    base_media_path = '/home/manage_telegrambot/manage_telegrambot/manage_telegrambot'
+else:
+    base_media_path = '/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot'
+
 future = ''
 
 
@@ -128,8 +133,8 @@ async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id, bot_u
             errors_mails += 1
 
     await bot.send_message(ADMIN_TELEGRAM_ID, f'''Рассылка завершена. 
-            Доставлено - {success_mails}, 
-            недоставлено - {errors_mails}''')
+Доставлено - {success_mails}, 
+недоставлено - {errors_mails}''')
     # return success_mails, errors_mails
 
 

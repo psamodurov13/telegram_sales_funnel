@@ -15,13 +15,18 @@ from datetime import datetime, timedelta
 import asyncio
 from mailing_state import *
 import random as rd
+from config import prod
+if prod:
+    base_media_path = '/home/manage_telegrambot/manage_telegrambot/manage_telegrambot/media/'
+else:
+    base_media_path = '/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/media/'
 
 import nest_asyncio
 # nest_asyncio.apply()
 
 logger.add('debug.log', format='{time} {level} {message}', level='INFO', rotation='15MB', compression='zip')
 debug_mode = False
-base_media_path = '/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/media/'
+# base_media_path = '/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/media/'
 
 
 tasks = []

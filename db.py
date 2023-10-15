@@ -4,10 +4,14 @@ from typing import Dict, List, Tuple
 import sqlite3
 from loguru import logger
 from datetime import date, datetime
+from config import prod
 
 # conn = sqlite3.connect("telegram_sales_funnel.db")
-conn = sqlite3.connect('/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/db.sqlite3',
-                       check_same_thread=False)
+if prod:
+    path_to_db = '/home/manage_telegrambot/manage_telegrambot/manage_telegrambot/db.sqlite3'
+else:
+    path_to_db = '/Users/psamodurov13/PycharmProjects/manage_telegrambot/manage_telegrambot/db.sqlite3'
+conn = sqlite3.connect(path_to_db, check_same_thread=False)
 cursor = conn.cursor()
 
 
