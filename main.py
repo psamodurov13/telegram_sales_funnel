@@ -16,6 +16,7 @@ import asyncio
 from mailing_state import *
 import random as rd
 from config import prod
+from pytz import timezone
 if prod:
     base_media_path = '/home/manage_telegrambot/manage_telegrambot/manage_telegrambot/media/'
 else:
@@ -168,8 +169,9 @@ def main():
             else:
                 logger.info(f'TAG {i} WAS NOT ADDED FOR USER {telegram_id}')
 
-    async def send_mailing_post(telegram_id, mailing_info, tg_bot, test_mode=False):
+    async def send_mailing_post(telegram_id, mailing_info, tg_bot, from_admin=None, test_mode=False):
         '''Функция отправки рассылки'''
+        logger.info(f'FROM ADMIN - {from_admin}')
         if 'button_text' in mailing_info.keys() and 'button_url' in mailing_info.keys():
             if mailing_info['button_text'] and mailing_info['button_url']:
                 keyboard = types.InlineKeyboardMarkup()
@@ -188,8 +190,13 @@ def main():
             else:
                 path_to_media = None
                 message_function = None
+            if from_admin:
+                logger.info(f'FROM ADMIN TRUE')
+                path_to_media = f'{base_media_path}{path_to_media}'
+                logger.info(f'NEW MEDIA FILE PATH {path_to_media}')
             if path_to_media:
-                with open(f'{base_media_path}{path_to_media}', 'rb') as file:
+                logger.info(f'FINAL MEDIA FILE PATH {path_to_media}')
+                with open(f'{path_to_media}', 'rb') as file:
                     media_file = file.read()
             else:
                 media_file = None
@@ -206,7 +213,8 @@ def main():
             await tg_bot.send_message(telegram_id, text, parse_mode='HTML', reply_markup=keyboard)
 
 
-    async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id, bot):
+    async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id, bot, from_admin=False):
+        logger.info(f'LAUNCH MAILING FROM ADMIN {from_admin}')
         logger.info(f'INTERVAL SCHEDULE STARTED')
         await asyncio.sleep(interval)
         success_mails = 0
@@ -217,7 +225,7 @@ def main():
                 delete('bots_mailingdelivery', i)
         for user_ids in users_telegram_id_id:
             try:
-                await send_mailing_post(user_ids[0], data, bot)
+                await send_mailing_post(user_ids[0], data, bot, from_admin)
                 column_values = {
                     'mailing_id': mailing_pk,
                     'subscriber_id': user_ids[1],
@@ -315,8 +323,9 @@ def main():
 
 
         @dp.message_handler(filters.IDFilter(user_id=ADMIN_TELEGRAM_ID), commands=['admin'])
-        async def get_admin_menu(message: types.Message):
+        async def get_admin_menu(message: types.Message, state: FSMContext):
             '''Функция вывода меню администратора'''
+            await state.reset_state()
             await message.answer('Меню администратора', reply_markup=types.ReplyKeyboardRemove())
             await message.answer('Выберите пункт', reply_markup=get_admin_menu_keyboard())
 
@@ -538,7 +547,7 @@ def main():
                 logger.info(f'CONFIRM MAILING')
                 data = await state.get_data()
                 start_mailing_time = datetime.strptime(data['datetime'], '%d.%m.%Y %H:%M')
-                interval = start_mailing_time.timestamp() - time.time()
+                interval = start_mailing_time.timestamp() - datetime.now().timestamp()
                 await callback.message.bot.send_message(callback.message.chat.id,
                                        f'Рассылка запланирована и будет запущена через {interval} секунд')
                 logger.info(f'START INTERVAL FOR MAILING - {interval}')
@@ -599,8 +608,11 @@ def main():
             if button == 'accept_admin':
                 mailing_info = fetchall('bots_mailings', [], f'id = {mailing_pk}')[0]
                 logger.info(f'MAILING INFO {mailing_info}')
+                logger.info(f"OLD TIME - {datetime.strptime(mailing_info['time'], '%Y-%m-%d %H:%M:%S')}")
                 start_mailing_time = datetime.strptime(mailing_info['time'], '%Y-%m-%d %H:%M:%S')
-                interval = start_mailing_time.timestamp() - time.time()
+                new_time = start_mailing_time + timezone('Europe/Moscow').utcoffset(start_mailing_time)
+                logger.info(f'NEW TIME - {start_mailing_time}')
+                interval = new_time.timestamp() - datetime.now().timestamp()
                 logger.info(f'TIME - {interval}')
                 await callback.message.bot.send_message(callback.message.chat.id,
                                                         f'Рассылка запланирована и будет запущена через {interval} секунд')
@@ -625,10 +637,10 @@ def main():
                 logger.info(f'subscribers_ids - {subscribers_ids}')
                 logger.info(f'DATA - {mailing_info}')
                 success, errors = await launch_mailing(mailing_pk, mailing_info, interval, users_telegram_id_id,
-                                                       callback.message.bot)
+                                                       callback.message.bot, from_admin=True)
                 await callback.message.bot.send_message(callback.message.chat.id, f'''Рассылка завершена. 
-                        Доставлено - {success}, 
-                        недоставлено - {errors}''')
+Доставлено - {success}, 
+недоставлено - {errors}''')
 
 
 

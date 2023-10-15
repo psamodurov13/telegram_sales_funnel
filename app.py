@@ -20,8 +20,12 @@ future = ''
 def index():
     return "Hello, World!"
 
+@app.route('/api/')
+def index_api():
+    return "Hello, World API!"
 
-@app.route('/restart/<token>')
+
+@app.route('/api/restart/<token>')
 def restart_bots(token):
     global future
 
@@ -138,7 +142,7 @@ async def launch_mailing(mailing_pk, data, interval, users_telegram_id_id, bot_u
     # return success_mails, errors_mails
 
 
-@app.route('/start-mailing', methods=['POST'])
+@app.route('/api/start-mailing', methods=['POST'])
 def start_mailing():
     from main import client_loop
     logger.info(f'CLIENT LOOP {client_loop}')
@@ -231,7 +235,7 @@ async def send_post(post_info, bot_username, chat=ADMIN_TELEGRAM_ID):
             await bot.send_audio(chat, file)
 
 
-@app.route('/send-test-message', methods=['POST'])
+@app.route('/api/send-test-message', methods=['POST'])
 def send_test_message():
     from main import client_loop
     logger.info(f'CLIENT LOOP {client_loop}')
@@ -265,5 +269,5 @@ def send_test_message():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', debug=True)
     # asyncio.run(app.run())
